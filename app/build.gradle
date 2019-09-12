@@ -5,7 +5,7 @@ android {
     buildToolsVersion "29.0.2"
     defaultConfig {
         applicationId "com.example.sync_testing"
-        minSdkVersion 15
+        minSdkVersion 25
         targetSdkVersion 29
         versionCode 1
         versionName "1.0"
@@ -27,4 +27,5 @@ dependencies {
     androidTestImplementation 'androidx.test:runner:1.2.0'
     androidTestImplementation 'androidx.test.espresso:espresso-core:3.2.0'
     implementation 'net.named-data:jndn-android:0.22'
+    implementation 'com.google.code.gson:gson:2.8.5'
 }

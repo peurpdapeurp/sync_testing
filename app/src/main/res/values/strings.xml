@@ -1,3 +1,5 @@
 <resources>
     <string name="app_name">sync_testing</string>
+    <string name="data_prefix">/pscr/NDN-PTT</string>
+    <string name="broadcast_prefix">/pscr/NDN-PTT/sync</string>
 </resources>
