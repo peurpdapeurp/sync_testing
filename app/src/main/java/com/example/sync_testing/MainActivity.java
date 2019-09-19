@@ -5,7 +5,7 @@ import androidx.appcompat.app.AppCompatActivity;
 
 import android.annotation.SuppressLint;
 import android.content.Context;
-import android.content.Intent;
+import android.content.SharedPreferences;
 import android.content.pm.ActivityInfo;
 import android.os.Bundle;
 import android.os.Handler;
@@ -18,6 +18,8 @@ import android.widget.EditText;
 import net.named_data.jndn.Name;
 import net.named_data.jndn.encoding.EncodingException;
 
+import java.util.ArrayList;
+
 public class MainActivity extends AppCompatActivity {
 
     private static final String TAG = "MainActivity";
@@ -25,7 +27,7 @@ public class MainActivity extends AppCompatActivity {
     // Messages
     private static final int MSG_NETWORK_THREAD_INITIALIZED = 0;
     private static final int MSG_RECORDERMODULE_RECORD_STARTED = 3;
-    private static final int MSG_SYNCMODULE_NEW_STREAM_AVAILABLE = 5;
+    private static final int MSG_SYNCMODULE_NEW_STREAMS_AVAILABLE = 5;
 
     // Thread objects
     private NetworkThread.Info networkThreadInfo_;
@@ -49,6 +51,12 @@ public class MainActivity extends AppCompatActivity {
     private Context ctx_;
     private long currentStreamId_ = 0;
 
+    // shared preferences object to store login parameters between sessions
+    SharedPreferences preferences_;
+    SharedPreferences.Editor preferencesEditor_;
+    private static String USER_NAME = "USER_NAME";
+    private static String CHANNEL_NAME = "CHANNEL_NAME";
+
     @SuppressLint("HandlerLeak")
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -58,6 +66,9 @@ public class MainActivity extends AppCompatActivity {
         setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_PORTRAIT);
 
         ctx_ = this;
+
+        preferences_ = getSharedPreferences("preferences_", Context.MODE_PRIVATE);
+        preferencesEditor_ = preferences_.edit();
 
         handler_ = new Handler() {
             @Override
@@ -73,9 +84,9 @@ public class MainActivity extends AppCompatActivity {
                                 syncSessionId_,
                                 networkThreadInfo_.looper
                         );
-                        syncModule_.eventNewStreamAvailable.addListener(streamName ->
+                        syncModule_.eventNewStreamsAvailable.addListener(syncStreamInfos ->
                                 handler_
-                                        .obtainMessage(MSG_SYNCMODULE_NEW_STREAM_AVAILABLE, streamName)
+                                        .obtainMessage(MSG_SYNCMODULE_NEW_STREAMS_AVAILABLE, syncStreamInfos)
                                         .sendToTarget()
                         );
 
@@ -95,10 +106,14 @@ public class MainActivity extends AppCompatActivity {
                         }
                         break;
                     }
-                    case MSG_SYNCMODULE_NEW_STREAM_AVAILABLE: {
-                        StreamInfo streamInfo = (StreamInfo) msg.obj;
-                        Log.d(TAG, "Got notification of new stream from sync module: " +
-                                streamInfo.toString());
+                    case MSG_SYNCMODULE_NEW_STREAMS_AVAILABLE: {
+                        ArrayList<SyncModule.SyncStreamInfo> syncStreamInfos = (ArrayList<SyncModule.SyncStreamInfo>) msg.obj;
+                        String syncStreamInfosString = "";
+                        for (SyncModule.SyncStreamInfo syncStreamInfo : syncStreamInfos) {
+                            syncStreamInfosString += syncStreamInfo.toString() + "\n";
+                        }
+                        Log.d(TAG, "Got notification of new streams from sync module: " + "\n" +
+                                syncStreamInfosString);
                         break;
                     }
                     default:
@@ -110,6 +125,9 @@ public class MainActivity extends AppCompatActivity {
         channelNameInput_ = (EditText) findViewById(R.id.channel_name_input);
         userNameInput_ = (EditText) findViewById(R.id.user_name_input);
 
+        channelNameInput_.setText(preferences_.getString(CHANNEL_NAME, "DefaultChannelName"));
+        userNameInput_.setText(preferences_.getString(USER_NAME, "DefaultUserName"));
+
         initializeSyncModuleButton_ = (Button) findViewById(R.id.initialize_sync_module_button);
         initializeSyncModuleButton_.setOnClickListener(new View.OnClickListener() {
             @Override
@@ -117,7 +135,10 @@ public class MainActivity extends AppCompatActivity {
                 String channelName = channelNameInput_.getText().toString();
                 String userName = userNameInput_.getText().toString();
 
-                long syncSessionId_ = System.currentTimeMillis();
+                preferencesEditor_.putString(CHANNEL_NAME, channelName).commit();
+                preferencesEditor_.putString(USER_NAME, userName).commit();
+
+                syncSessionId_ = System.currentTimeMillis();
 
                 applicationBroadcastPrefix_ = new Name(getString(R.string.broadcast_prefix))
                         .append(channelName);

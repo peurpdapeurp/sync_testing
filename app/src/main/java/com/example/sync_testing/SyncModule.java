@@ -26,6 +26,7 @@ import net.named_data.jndn.sync.ChronoSync2013;
 import net.named_data.jndn.util.Blob;
 
 import java.io.IOException;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -45,13 +46,41 @@ public class SyncModule {
     public static final int MSG_NEW_STREAM_PRODUCING = 2;
 
     // Events
-    public Event<StreamInfo> eventNewStreamAvailable;
+    public Event<ArrayList<SyncStreamInfo>> eventNewStreamsAvailable;
 
     private Network network_;
     private Name applicationBroadcastPrefix_;
     private Name applicationDataPrefix_;
     private long sessionId_;
     private Handler handler_;
+
+    public static class SyncStreamInfo {
+        public SyncStreamInfo(String channelName, String userName, long sessionId, long seqNum, StreamMetaData metaData,
+                              boolean isMetaDataInherited) {
+            this.channelName = channelName;
+            this.userName = userName;
+            this.sessionId = sessionId;
+            this.seqNum = seqNum;
+            this.metaData = metaData;
+            this.isMetaDataInherited = isMetaDataInherited;
+        }
+        String channelName;
+        String userName;
+        long sessionId;
+        long seqNum;
+        StreamMetaData metaData;
+        boolean isMetaDataInherited = false;
+
+        @Override
+        public String toString() {
+            return "channelName " + channelName + ", " +
+                    "userName " + userName + ", " +
+                    "sessionId " + sessionId + ", " +
+                    "seqNum " + seqNum + ", " +
+                    "metaData " + "[" + ((metaData != null) ? metaData.toString() : "null") + "]" + ", " +
+                    "isMetaDataInherited " + isMetaDataInherited;
+        }
+    }
 
     private class StreamSeqNumAndMetaData {
         public StreamSeqNumAndMetaData(long seqNum, StreamMetaData metaData) {
@@ -81,7 +110,7 @@ public class SyncModule {
 
         sessionId_ = sessionId;
 
-        eventNewStreamAvailable = new SimpleEvent<>();
+        eventNewStreamsAvailable = new SimpleEvent<>();
 
         handler_ = new Handler(networkThreadLooper) {
             @Override
@@ -145,13 +174,51 @@ public class SyncModule {
         private boolean closed_ = false;
         private ChronoSync2013 sync_;
         private Gson jsonSerializer_;
-        private HashMap<String, HashSet<Long>> recvdSeqNums_;
+        private HashMap<UserIdAndSession, HashSet<Long>> recvdSeqNums_;
+        private HashMap<UserIdAndSession, Long> lastSeqNum_;
+
+        private class UserIdAndSession {
+            public UserIdAndSession(String userId, long session) {
+                this.userId = userId;
+                this.session = session;
+            }
+            final String userId;
+            final long session;
+
+            @Override
+            public String toString() {
+                return "userId " + userId + ", " +
+                        "session " + session;
+            }
+
+            @Override
+            public int hashCode() {
+                int prime = 31;
+                int result = 1;
+                result = prime * result + ((userId == null) ? 0 : userId.hashCode());
+                result = prime * result + Long.valueOf(session).hashCode();
+                return result;
+            }
+
+            @Override
+            public boolean equals(Object obj) {
+                UserIdAndSession other;
+                try {
+                    other = (UserIdAndSession) obj;
+                }
+                catch (Exception e) {
+                    return false;
+                }
+                return (userId.equals(other.userId) && session == other.session);
+            }
+        }
 
         private Network() {
 
             newStreamProductionNotifications_ = new LinkedTransferQueue<>();
 
             recvdSeqNums_ = new HashMap<>();
+            lastSeqNum_ = new HashMap<>();
 
             jsonSerializer_ = new Gson();
 
@@ -224,58 +291,100 @@ public class SyncModule {
                 for (Object o : syncStates) {
 
                     ChronoSync2013.SyncState syncState = (ChronoSync2013.SyncState) o;
+                    Name dataPrefixName = new Name(syncState.getDataPrefix());
                     long session = syncState.getSessionNo();
                     long seqNum = syncState.getSequenceNo();
-                    String dataPrefix = syncState.getDataPrefix();
-                    String userId = dataPrefix.substring(dataPrefix.lastIndexOf("/") + 1);
+                    String userName = dataPrefixName.get(-2).toEscapedString();
+                    String channelName = dataPrefixName.get(-3).toEscapedString();
+                    UserIdAndSession userIdAndSession = new UserIdAndSession(userName, session);
 
-                    if (dataPrefix.equals(applicationDataPrefix_.toString())) {
+                    Log.d(TAG, "sync state data prefix: " + dataPrefixName.toString() + ", " +
+                                "our appDataPrefix; " + applicationDataPrefix_.toString());
+
+                    if (dataPrefixName.equals(applicationDataPrefix_)) {
                         Log.d(TAG, "got sync state for own user");
                         continue;
                     }
 
-                    if (!recvdSeqNums_.containsKey(userId)) {
-                        recvdSeqNums_.put(userId, new HashSet<Long>());
-                        recvdSeqNums_.get(userId).add(seqNum);
-                    }
-                    else {
-                        HashSet<Long> seqNums = recvdSeqNums_.get(userId);
-                        if (seqNums.contains(seqNum)) {
-                            Log.d(TAG, "duplicate seq num " + seqNum + " from " + userId);
-                            continue;
-                        }
-                        seqNums.add(seqNum);
+                    if (isDuplicateSeqNum(userIdAndSession, seqNum))
+                        continue;
+
+                    if (!lastSeqNum_.containsKey(userIdAndSession)) {
+                        lastSeqNum_.put(userIdAndSession, seqNum);
                     }
 
                     Log.d(TAG, "app info from sync state: " + syncState.getApplicationInfo().toString());
                     StreamMetaData metaData = jsonSerializer_.fromJson(syncState.getApplicationInfo().toString(), StreamMetaData.class);
-                    if (metaData == null) {
-                        continue;
-                    }
+
                     Log.d(TAG, "\n" + "got sync state (" +
                             "session " + session + ", " +
                             "seqNum " + seqNum + ", " +
-                            "dataPrefix " + dataPrefix + ", " +
-                            "userId " + userId + ", " +
+                            "dataPrefix " + dataPrefixName.toString() + ", " +
+                            "userId " + userName + ", " +
                             "isRecovery " + isRecovery +
                             ")" + "\n" +
                             "stream meta data (" +
-                            metaData.toString() +
+                            ((metaData != null) ? metaData.toString() : "null") +
                             ")");
 
-                    eventNewStreamAvailable.trigger(
-                            new StreamInfo(
-                                    new Name(dataPrefix).appendSequenceNumber(seqNum),
-                                    metaData.framesPerSegment,
-                                    metaData.producerSamplingRate,
-                                    metaData.recordingStartTimestamp
+                    ArrayList<SyncStreamInfo> availableStreams = new ArrayList<>();
+                    long lastSeqNum = lastSeqNum_.get(userIdAndSession);
+
+                    if (lastSeqNum > seqNum) {
+                        Log.d(TAG, "got seq num " + seqNum + ", but last seq num was " + lastSeqNum + "; ignoring it");
+                        continue;
+                    }
+
+                    if (lastSeqNum < seqNum) {
+                        for (int i = 0; i < seqNum - lastSeqNum - 1; i++) {
+                            availableStreams.add(
+                                    new SyncStreamInfo(
+                                            channelName,
+                                            userName,
+                                            session,
+                                            lastSeqNum + i + 1,
+                                            metaData,
+                                            true
+                                    )
+                            );
+                        }
+                    }
+                    availableStreams.add(
+                            new SyncStreamInfo(
+                                    channelName,
+                                    userName,
+                                    session,
+                                    seqNum,
+                                    metaData,
+                                    false
                             )
                     );
+
+                    eventNewStreamsAvailable.trigger(availableStreams);
+
+                    lastSeqNum_.put(userIdAndSession, seqNum);
 
                 }
 
             }
         };
+
+        // returns true if seq num was duplicate, false if seq num was not duplicate
+        private boolean isDuplicateSeqNum(UserIdAndSession userIdAndSession, long seqNum) {
+            if (!recvdSeqNums_.containsKey(userIdAndSession)) {
+                recvdSeqNums_.put(userIdAndSession, new HashSet<Long>());
+                recvdSeqNums_.get(userIdAndSession).add(seqNum);
+                return false;
+            }
+
+            HashSet<Long> seqNums = recvdSeqNums_.get(userIdAndSession);
+            if (seqNums.contains(seqNum)) {
+                Log.d(TAG, "duplicate seq num " + seqNum + " from " + userIdAndSession);
+                return true;
+            }
+            seqNums.add(seqNum);
+            return false;
+        }
 
         ChronoSync2013.OnInitialized onInitialized = new ChronoSync2013.OnInitialized() {
             @Override
