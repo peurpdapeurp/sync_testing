@@ -97,10 +97,7 @@ public class MainActivity extends AppCompatActivity {
                     case MSG_RECORDERMODULE_RECORD_STARTED: {
                         StreamInfo streamInfo = (StreamInfo) msg.obj;
                         try {
-                            syncModule_.notifyNewStreamProducing(
-                                    streamInfo.streamName.get(-1).toSequenceNumber(),
-                                    streamInfo.getMetaData()
-                            );
+                            syncModule_.notifyNewStreamProducing(streamInfo.streamName.get(-1).toSequenceNumber());
                         } catch (EncodingException e) {
                             e.printStackTrace();
                         }

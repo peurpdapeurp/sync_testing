@@ -23,8 +23,6 @@ import net.named_data.jndn.security.identity.MemoryIdentityStorage;
 import net.named_data.jndn.security.identity.MemoryPrivateKeyStorage;
 import net.named_data.jndn.security.policy.SelfVerifyPolicyManager;
 import net.named_data.jndn.sync.ChronoSync2013;
-import net.named_data.jndn.util.Blob;
-
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -55,46 +53,23 @@ public class SyncModule {
     private Handler handler_;
 
     public static class SyncStreamInfo {
-        public SyncStreamInfo(String channelName, String userName, long sessionId, long seqNum, StreamMetaData metaData,
-                              boolean isMetaDataInherited) {
+        public SyncStreamInfo(String channelName, String userName, long sessionId, long seqNum) {
             this.channelName = channelName;
             this.userName = userName;
             this.sessionId = sessionId;
             this.seqNum = seqNum;
-            this.metaData = metaData;
-            this.isMetaDataInherited = isMetaDataInherited;
         }
         String channelName;
         String userName;
         long sessionId;
         long seqNum;
-        StreamMetaData metaData;
-        boolean isMetaDataInherited = false;
 
         @Override
         public String toString() {
             return "channelName " + channelName + ", " +
                     "userName " + userName + ", " +
                     "sessionId " + sessionId + ", " +
-                    "seqNum " + seqNum + ", " +
-                    "metaData " + "[" + ((metaData != null) ? metaData.toString() : "null") + "]" + ", " +
-                    "isMetaDataInherited " + isMetaDataInherited;
-        }
-    }
-
-    private class StreamSeqNumAndMetaData {
-        public StreamSeqNumAndMetaData(long seqNum, StreamMetaData metaData) {
-            this.seqNum = seqNum;
-            this.metaData = metaData;
-        }
-        long seqNum;
-        StreamMetaData metaData;
-
-        @Override
-        public String toString() {
-            return "seqNum " + seqNum + ", " +
-                    "framesPerSegment " + metaData.framesPerSegment + ", " +
-                    "producerSamplingRate " + metaData.producerSamplingRate;
+                    "seqNum " + seqNum;
         }
     }
 
@@ -127,9 +102,9 @@ public class SyncModule {
                         break;
                     }
                     case MSG_NEW_STREAM_PRODUCING: {
-                        StreamSeqNumAndMetaData info = (StreamSeqNumAndMetaData) msg.obj;
-                        Log.d(TAG, "new stream being produced: " + info.toString());
-                        network_.newStreamProductionNotifications_.add(info);
+                        Long seqNum = (Long) msg.obj;
+                        Log.d(TAG, "new stream being produced, seq num " + seqNum);
+                        network_.newStreamProductionNotifications_.add(seqNum);
                         break;
                     }
                     default:
@@ -158,9 +133,9 @@ public class SyncModule {
         handler_.sendEmptyMessageAtTime(MSG_DO_SOME_WORK, thisOperationStartTimeMs + PROCESSING_INTERVAL_MS);
     }
 
-    public void notifyNewStreamProducing(long seqNum, StreamMetaData metaData) {
+    public void notifyNewStreamProducing(long seqNum) {
         handler_
-                .obtainMessage(MSG_NEW_STREAM_PRODUCING, new StreamSeqNumAndMetaData(seqNum, metaData))
+                .obtainMessage(MSG_NEW_STREAM_PRODUCING, Long.valueOf(seqNum))
                 .sendToTarget();
     }
 
@@ -168,7 +143,7 @@ public class SyncModule {
 
         private final static String TAG = "SyncModule_Network";
 
-        private LinkedTransferQueue<StreamSeqNumAndMetaData> newStreamProductionNotifications_;
+        private LinkedTransferQueue<Long> newStreamProductionNotifications_;
         private Face face_;
         private KeyChain keyChain_;
         private boolean closed_ = false;
@@ -258,16 +233,14 @@ public class SyncModule {
             if (closed_) return;
 
             while (newStreamProductionNotifications_.size() != 0) {
-                StreamSeqNumAndMetaData info = newStreamProductionNotifications_.poll();
-                if (info == null) continue;
+                Long seqNum = newStreamProductionNotifications_.poll();
+                if (seqNum == null) continue;
                 try {
-                    String streamMetaDataString = jsonSerializer_.toJson(info.metaData);
-                    Log.d(TAG, "serialized stream meta data into json string: " + streamMetaDataString);
-                    if (info.seqNum != sync_.getSequenceNo() + 1) {
+                    if (seqNum != sync_.getSequenceNo() + 1) {
                         throw new IllegalStateException("got unexpected stream seq num (expected " +
-                                (sync_.getSequenceNo() + 1) + ", got " + info.seqNum + ")");
+                                (sync_.getSequenceNo() + 1) + ", got " + seqNum + ")");
                     }
-                    sync_.publishNextSequenceNo(new Blob(streamMetaDataString));
+                    sync_.publishNextSequenceNo();
                 } catch (IOException e) {
                     e.printStackTrace();
                 } catch (SecurityException e) {
@@ -313,18 +286,12 @@ public class SyncModule {
                         lastSeqNum_.put(userIdAndSession, seqNum);
                     }
 
-                    Log.d(TAG, "app info from sync state: " + syncState.getApplicationInfo().toString());
-                    StreamMetaData metaData = jsonSerializer_.fromJson(syncState.getApplicationInfo().toString(), StreamMetaData.class);
-
                     Log.d(TAG, "\n" + "got sync state (" +
                             "session " + session + ", " +
                             "seqNum " + seqNum + ", " +
                             "dataPrefix " + dataPrefixName.toString() + ", " +
                             "userId " + userName + ", " +
                             "isRecovery " + isRecovery +
-                            ")" + "\n" +
-                            "stream meta data (" +
-                            ((metaData != null) ? metaData.toString() : "null") +
                             ")");
 
                     ArrayList<SyncStreamInfo> availableStreams = new ArrayList<>();
@@ -342,9 +309,7 @@ public class SyncModule {
                                             channelName,
                                             userName,
                                             session,
-                                            lastSeqNum + i + 1,
-                                            metaData,
-                                            true
+                                            lastSeqNum + i + 1
                                     )
                             );
                         }
@@ -354,9 +319,7 @@ public class SyncModule {
                                     channelName,
                                     userName,
                                     session,
-                                    seqNum,
-                                    metaData,
-                                    false
+                                    seqNum
                             )
                     );
 
